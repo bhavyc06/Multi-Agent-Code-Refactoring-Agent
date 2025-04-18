@@ -1,16 +1,18 @@
-# version: "3.9"
+version: "3.9"
+
+networks:
+  refactor_net:
+    driver: bridge
+
 services:
-  # === FastAPI + CrewAI + Logfire ===
   api:
     build: ./backend
-    container_name: refactor_api
-    environment:
-      REDIS_HOST: redis
-      OLLAMA_URL: http://ollama:11434
-      LOGFIRE_DISABLE_CONSOLE_COLORS: "1"
-      LOGFIRE_PROJECT: "local-refactor"  # use `logfire projects new` to create
+    env_file:
+      - .env
+    networks:
+      - refactor_net
     volumes:
-      - ./code_workspace:/app/code_workspace
+      - ./code_workspace:/app/code
     ports:
       - "8000:8000"
     depends_on:
@@ -18,43 +20,63 @@ services:
       - ollama
       - mcp_fs
       - mcp_shell
-      - mcp_semgrep
+      - mcp_scan
 
-  # === Redis ===
+    
+
   redis:
     image: redis:7-alpine
-    container_name: refactor_redis
-    ports: ["6379:6379"]
+    networks:
+      - refactor_net
+    ports:
+      - "6379:6379"
 
-  # === Ollama (local LLM) ===
   ollama:
     image: ollama/ollama:latest
-    container_name: refactor_ollama
-    ports: ["11434:11434"]
+    networks:
+      - refactor_net
     volumes:
       - ollama_models:/root/.ollama
+    ports:
+      - "11434:11434"
 
-  # === MCP TOOL SERVERS ===
   mcp_fs:
     build: ./tools/mcp_fs
-    container_name: mcp_fs
+    networks:
+      - refactor_net
     volumes:
       - ./code_workspace:/code
-    ports: ["3901:3901"]
+    ports:
+      - "3901:8000"
 
   mcp_shell:
     build: ./tools/mcp_shell
-    container_name: mcp_shell
+    networks:
+      - refactor_net
     volumes:
       - ./code_workspace:/code
-    ports: ["3902:3902"]
+    ports:
+      - "3902:8000"
 
-  mcp_semgrep:
-    build: ./tools/mcp_semgrep
-    container_name: mcp_semgrep
+  mcp_scan:
+    build: ./tools/mcp_scan
+    networks:
+      - refactor_net
     volumes:
       - ./code_workspace:/code
-    ports: ["3903:3903"]
+    ports:
+      - "3903:8000"
+
+  frontend:
+    build: ./frontend
+    env_file:
+      - .env
+    networks:
+      - refactor_net
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
 
 volumes:
   ollama_models:

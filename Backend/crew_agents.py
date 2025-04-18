@@ -1,127 +1,130 @@
-import requests, json, os
+import os, requests
 from crewai import Agent, Task, Crew, Process
-from crewai.llm import LLM
-from pydantic import BaseModel
+from crewai_tools import tool
+from langchain_community.chat_models import ChatOllama   # langchain‑community ≥0.0.31
 
-# === MCP helper ===
+
+# ────────────────────────── MCP helper ──────────────────────────
 class MCPClient:
-    def __init__(self, base):
-        self.base = base.rstrip('/')
-    def call(self, tool, payload):
-        resp = requests.post(f"{self.base}/{tool}", json=payload, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+    def __init__(self, base: str):
+        self.base = base.rstrip("/")
 
-# MCP endpoints
+    def call(self, endpoint: str, payload: dict):
+        r = requests.post(f"{self.base}/{endpoint}", json=payload, timeout=60)
+        r.raise_for_status()
+        return r.json()
+
+
 FS  = MCPClient("http://mcp_fs:3901")
 SH  = MCPClient("http://mcp_shell:3902")
-SEC = MCPClient("http://mcp_semgrep:3903")
+SCN = MCPClient("http://mcp_scan:3903")
 
-# === Local LLM via Ollama ===
-LLM_ENDPOINT = os.environ.get("OLLAMA_URL", "http://ollama:11434")
-LOCAL_MODEL = "codellama:7b-instruct-q4_0"
-local_llm = LLM(
-    model=LOCAL_MODEL,
-    base_url=LLM_ENDPOINT,
-    api_key="ollama"  # dummy, not used by Ollama
+
+# ────────────────────────── Tool wrappers ───────────────────────
+@tool
+def read_file(path: str) -> str:
+    """Read a file from the shared workspace"""
+    return FS.call("read", {"path": path})
+
+
+@tool
+def write_file(path: str, content: str) -> str:
+    """Write content to a file in the workspace"""
+    return FS.call("write", {"path": path, "content": content})
+
+
+@tool
+def run_pytest(workdir: str = ".") -> str:
+    """Run pytest in *workdir* and return its output"""
+    return SH.call("exec", {"command": "pytest -q", "workdir": workdir})
+
+
+@tool
+def bandit_scan(path: str = ".") -> str:
+    """Run Bandit security scan"""
+    return SCN.call("scan", {"path": path})
+
+
+# ────────────────────────── Local Ollama model ──────────────────
+OLLAMA_HOST = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+local_llm   = ChatOllama(
+    model="codellama:7b-instruct-q4_0",
+    base_url=OLLAMA_HOST,
+    temperature=0.2,
 )
 
-# === Utility wrappers exposed to agents ===
-def read_file(path: str) -> str:
-    return FS.call("read_file", {"path": path})
 
-def write_file(path: str, content: str) -> str:
-    return FS.call("write_file", {"path": path, "content": content})
-
-def run_command(cmd: str) -> str:
-    return SH.call("execute_command", {"command": cmd})
-
-def semgrep_scan(path=".") -> str:
-    return SEC.call("scan_code", {"path": path})
-
-# Register wrappers as CrewAI Tools
-from crewai_tools import tool
-
-@tool(read_file)
-def fs_read_file(path: str) -> str: ...
-
-@tool(write_file)
-def fs_write_file(path: str, content: str) -> str: ...
-
-@tool(run_command)
-def shell_exec(cmd: str) -> str: ...
-
-@tool(semgrep_scan)
-def sec_scan(path="."): ...
-
-# === Agents ===
+# ────────────────────────── Agents ──────────────────────────────
 summarizer = Agent(
-    role="Code Summarizer",
-    goal="Understand the provided code and summarize its behaviour and structure.",
-    backstory="A meticulous software archeologist.",
-    tools=[fs_read_file],
+    role="Code Summarizer",
+    backstory="A meticulous software archeologist who explains code succinctly.",
+    goal="Summarise behaviour and structure of the supplied code.",
     llm=local_llm,
+    tools=[read_file],
     verbose=True,
 )
 
 analyzer = Agent(
-    role="Vulnerability & Logic Analyzer",
-    goal="Identify vulnerabilities and logic errors via static and dynamic analysis.",
-    backstory="A security‑minded QA specialist.",
-    tools=[fs_read_file, shell_exec, sec_scan],
+    role="Bug & Vulnerability Analyzer",
+    backstory="A veteran QA/security engineer with an eye for edge‑cases.",
+    goal="Discover logic bugs, failing tests and security issues.",
     llm=local_llm,
+    tools=[read_file, run_pytest, bandit_scan],
     verbose=True,
 )
 
 strategist = Agent(
-    role="Improvement Strategist",
-    goal="Suggest concrete improvements based on identified issues.",
-    backstory="A senior software architect.",
+    role="Improvement Strategist",
+    backstory="A senior architect who provides clear, actionable refactor plans.",
+    goal="Propose refactorings that resolve all discovered issues.",
     llm=local_llm,
     verbose=True,
 )
 
 rewriter = Agent(
-    role="Code Rewriter",
-    goal="Apply improvements and output revised, working code.",
-    backstory="A diligent refactoring bot.",
-    tools=[fs_read_file, fs_write_file, shell_exec, sec_scan],
+    role="Code Rewriter",
+    backstory="A disciplined developer who applies fixes and ensures tests pass.",
+    goal="Implement the improvements and make sure tests succeed.",
     llm=local_llm,
+    tools=[read_file, write_file, run_pytest],
     verbose=True,
 )
 
-# === Crew builder ===
-def build_crew(code_path: str):
-    task1 = Task(
-        description=(
-            "Read the code at {code_path} and provide a concise summary "
-            "of its purpose and structure."),
-        expected_output="Summary text.",
+
+# ────────────────────────── Crew factory ────────────────────────
+def build(code_path: str) -> Crew:
+    """Return a Crew ready to work on *code_path*."""
+    t1 = Task(
+        description=f"Summarise the file at **{code_path}**.",
+        expected_output="Concise paragraph summarising purpose and structure.",
         agent=summarizer,
     )
-    task2 = Task(
-        description=(
-            "Using static scan and tests, list security issues or logic bugs in the code."),
-        expected_output="List of issues with line numbers.",
+
+    t2 = Task(
+        description="List every bug, failing test or security issue in the code.",
+        expected_output="Bullet list with line numbers and severity.",
         agent=analyzer,
     )
-    task3 = Task(
-        description="Propose changes to fix all reported issues.",
-        expected_output="Improvement plan.",
+
+    t3 = Task(
+        description="Propose precise code changes or refactors to resolve all issues.",
+        expected_output="Step‑by‑step refactor plan.",
         agent=strategist,
     )
-    task4 = Task(
+
+    t4 = Task(
         description=(
-            "Implement the improvements and overwrite the original file at {code_path}. "
-            "Run tests afterwards to ensure success."),
-        expected_output="Refactored code (diff).",
+            f"Apply the approved improvements to **{code_path}**, overwrite the file, "
+            "then run pytest. Ensure all tests pass and report the diff."
+        ),
+        expected_output="Patch/diff of the refactored file plus pytest summary.",
         agent=rewriter,
     )
 
     return Crew(
         agents=[summarizer, analyzer, strategist, rewriter],
-        tasks=[task1, task2, task3, task4],
+        tasks=[t1, t2, t3, t4],
         process=Process.sequential,
         verbose=2,
-        metadata={"code_path": code_path},  # auto‑format tasks
+        metadata={"code_path": code_path},
     )

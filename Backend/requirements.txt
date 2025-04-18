@@ -1,9 +1,8 @@
-fastapi==0.110.2
-uvicorn[standard]==0.29.0
+fastapi
+uvicorn[standard]
 crewai==0.28.2
-crewai-tools==0.3.1
-anthropic-mcp==0.1.7
-pydantic-ai[logfire]==0.6.1
-redis==5.0.3
-python-multipart==0.0.7
-requests==2.31.0    # used by MCP client wrapper
+crewai-tools==0.0.12
+pydantic-ai[logfire]==0.1.2
+redis
+httpx
+langchain-community==0.0.31 
