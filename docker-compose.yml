@@ -1,0 +1,60 @@
+# version: "3.9"
+services:
+  # === FastAPI + CrewAI + Logfire ===
+  api:
+    build: ./backend
+    container_name: refactor_api
+    environment:
+      REDIS_HOST: redis
+      OLLAMA_URL: http://ollama:11434
+      LOGFIRE_DISABLE_CONSOLE_COLORS: "1"
+      LOGFIRE_PROJECT: "local-refactor"  # use `logfire projects new` to create
+    volumes:
+      - ./code_workspace:/app/code_workspace
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - ollama
+      - mcp_fs
+      - mcp_shell
+      - mcp_semgrep
+
+  # === Redis ===
+  redis:
+    image: redis:7-alpine
+    container_name: refactor_redis
+    ports: ["6379:6379"]
+
+  # === Ollama (local LLM) ===
+  ollama:
+    image: ollama/ollama:latest
+    container_name: refactor_ollama
+    ports: ["11434:11434"]
+    volumes:
+      - ollama_models:/root/.ollama
+
+  # === MCP TOOL SERVERS ===
+  mcp_fs:
+    build: ./tools/mcp_fs
+    container_name: mcp_fs
+    volumes:
+      - ./code_workspace:/code
+    ports: ["3901:3901"]
+
+  mcp_shell:
+    build: ./tools/mcp_shell
+    container_name: mcp_shell
+    volumes:
+      - ./code_workspace:/code
+    ports: ["3902:3902"]
+
+  mcp_semgrep:
+    build: ./tools/mcp_semgrep
+    container_name: mcp_semgrep
+    volumes:
+      - ./code_workspace:/code
+    ports: ["3903:3903"]
+
+volumes:
+  ollama_models:
